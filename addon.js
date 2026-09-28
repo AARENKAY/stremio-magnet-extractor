@@ -11,7 +11,10 @@ if (typeof fetch !== 'function') {
 const PORT = Number(process.env.PORT || 7000);
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_SOURCES = 10;
-const DEFAULT_TORRENTIO = 'https://torrentio.strem.fun/sort=seeders';
+const DEFAULT_SOURCES = [
+  'https://torrentio.strem.fun/sort=seeders',
+  'https://comet.elfhosted.com'
+];
 const ADDON_VERSION = '1.4.0';
 const CACHE_MAX_AGE_S = 900;
 
@@ -40,7 +43,7 @@ const manifest = {
       key: 'sources',
       type: 'text',
       title: 'Addon base URLs (separate with spaces)',
-      default: DEFAULT_TORRENTIO,
+      default: DEFAULT_SOURCES,
       required: false
     },
     {
@@ -355,7 +358,7 @@ function extractMagnet(stream, hash) {
 builder.defineStreamHandler(async args => {
   const config = args.config || {};
 
-  const sources = normalizeSources(config.sources || DEFAULT_TORRENTIO);
+  const sources = normalizeSources(config.sources || DEFAULT_SOURCES);
 
   const timeout = Math.max(
     1000,
@@ -457,6 +460,6 @@ console.log(`Manifest:  http://${LOCAL_IP}:${PORT}/manifest.json`);
 console.log(`Install:   stremio://${LOCAL_IP}:${PORT}/manifest.json`);
 console.log(`Configure: http://${LOCAL_IP}:${PORT}/configure`);
 console.log(`LAN bind:  0.0.0.0:${PORT}`);
-console.log(`Default source: ${DEFAULT_TORRENTIO}`);
+console.log(`Default source: ${DEFAULT_SOURCES}`);
 console.log(`Private-host blocking: ${BLOCK_PRIVATE_SOURCES ? 'on' : 'off'}`);
 console.log('');

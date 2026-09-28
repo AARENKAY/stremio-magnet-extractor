@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: stremio-magnet-extractor
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /manifest.json
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

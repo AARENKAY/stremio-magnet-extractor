@@ -16,7 +16,7 @@ const DEFAULT_SOURCES = [
 ];
 const ADDON_VERSION = '1.5.0';
 const CACHE_MAX_AGE_S = 900;
-const ENABLE_1337X = process.env.ENABLE_1337X !== '0';
+const ENABLE_1337X = process.env.ENABLE_1337X !== '1';
 const X1337_BASE = 'https://1337x.to';
 const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
 const MAX_1337X_RESULTS = 10;

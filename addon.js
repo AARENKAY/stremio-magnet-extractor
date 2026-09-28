@@ -12,7 +12,6 @@ const PORT = Number(process.env.PORT || 7000);
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_SOURCES = 10;
 const DEFAULT_SOURCES = [
-  'https://torrentio.strem.fun/sort=seeders',
   'https://comet.elfhosted.com'
 ];
 const ADDON_VERSION = '1.4.0';

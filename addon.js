@@ -89,14 +89,19 @@ async function fetchJson(url, timeoutMs) {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
+      redirect: 'follow',
       headers: {
-        accept: 'application/json',
-        'user-agent': 'stremio-magnet-extractor/1.1'
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36'
       }
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const location = response.url && response.url !== url
+        ? ` -> ${response.url}`
+        : '';
+      throw new Error(`HTTP ${response.status}${location}`);
     }
 
     return await response.json();
@@ -131,7 +136,9 @@ function magnetName(stream) {
 
 function normalizeHash(value) {
   if (typeof value !== 'string') return null;
+
   let hash = value.trim();
+
   if (/^magnet:\?/i.test(hash)) {
     try {
       const xt = new URL(hash).searchParams.get('xt') || '';
@@ -140,9 +147,15 @@ function normalizeHash(value) {
       return null;
     }
   }
-  hash = hash.replace(/^torrent:\/\//i, '').split(/[?#&]/, 1)[0].trim();
+
+  hash = hash
+    .replace(/^torrent:\/\//i, '')
+    .split(/[?#&]/, 1)[0]
+    .trim();
+
   if (/^[a-fA-F0-9]{40}$/.test(hash)) return hash;
   if (/^[a-fA-F0-9]{64}$/.test(hash)) return hash;
+
   return null;
 }
 
@@ -163,12 +176,25 @@ function extractHash(stream) {
 }
 
 function extractMagnet(stream, hash) {
-  const candidates = [stream?.url, stream?.externalUrl, stream?.playbackUrl];
+  const candidates = [
+    stream?.url,
+    stream?.externalUrl,
+    stream?.playbackUrl
+  ];
+
   for (const candidate of candidates) {
-    if (typeof candidate !== 'string' || !/^magnet:\?/i.test(candidate.trim())) continue;
+    if (
+      typeof candidate !== 'string' ||
+      !/^magnet:\?/i.test(candidate.trim())
+    ) {
+      continue;
+    }
+
     try {
       const url = new URL(candidate.trim());
+
       if (!url.searchParams.get('xt')) continue;
+
       return candidate.trim();
     } catch (_) {}
   }
@@ -176,8 +202,12 @@ function extractMagnet(stream, hash) {
   if (!hash) return null;
 
   const parts = [`xt=urn:btih:${hash}`];
+
   const name = magnetName(stream);
-  if (name) parts.push(`dn=${encodeURIComponent(name)}`);
+
+  if (name) {
+    parts.push(`dn=${encodeURIComponent(name)}`);
+  }
 
   for (const tracker of trackerUrls(stream.sources)) {
     parts.push(`tr=${encodeURIComponent(tracker)}`);
@@ -189,89 +219,196 @@ function extractMagnet(stream, hash) {
 function streamLabel(stream) {
   const quality = stream?.name ? String(stream.name) : 'Torrent';
   const hash = String(stream.infoHash).slice(0, 8);
+
   return `🧲 ${quality} | ${hash}`;
 }
 
 builder.defineStreamHandler(async args => {
   const config = args.config || {};
-  const sources = normalizeSources(config.sources || DEFAULT_TORRENTIO);
+
+  const sources = normalizeSources(
+    config.sources || DEFAULT_TORRENTIO
+  );
+
   const timeout = Math.max(
     1000,
-    Math.min(30000, Number(config.timeout) || DEFAULT_TIMEOUT_MS)
+    Math.min(
+      30000,
+      Number(config.timeout) || DEFAULT_TIMEOUT_MS
+    )
   );
 
   const validSources = sources.filter(validHttpUrl);
-  if (!validSources.length) return { streams: [] };
 
-  console.log(`[request] ${args.type}/${args.id} -> ${validSources.length} source(s)`);
+  if (!validSources.length) {
+    return { streams: [] };
+  }
 
-  const results = await Promise.all(validSources.map(async source => {
-    const url = buildStreamUrl(source, args.type, args.id);
+  console.log(
+    `[request] ${args.type}/${args.id} -> ${validSources.length} source(s)`
+  );
 
-    try {
-      const data = await fetchJson(url, timeout);
-      return Array.isArray(data?.streams) ? data.streams : [];
-    } catch (error) {
-      console.warn(`[source failed] ${safeHost(url)} :: ${error.message}`);
-      return [];
-    }
-  }));
+  const results = await Promise.all(
+    validSources.map(async source => {
+      const url = buildStreamUrl(
+        source,
+        args.type,
+        args.id
+      );
+
+      try {
+        const data = await fetchJson(url, timeout);
+
+        return Array.isArray(data?.streams)
+          ? data.streams
+          : [];
+      } catch (error) {
+        console.warn(
+          `[source failed] ${safeHost(url)} :: ${error.message}`
+        );
+
+        return [];
+      }
+    })
+  );
 
   const streams = [];
   const seen = new Set();
 
-  for (let sourceIndex = 0; sourceIndex < results.length; sourceIndex++) {
+  for (
+    let sourceIndex = 0;
+    sourceIndex < results.length;
+    sourceIndex++
+  ) {
     const group = results[sourceIndex];
-    const sourceName = safeHost(validSources[sourceIndex]);
+
+    const sourceName = safeHost(
+      validSources[sourceIndex]
+    );
 
     for (const sourceStream of group) {
       const hash = extractHash(sourceStream);
+
       if (!hash) continue;
 
-      const magnet = extractMagnet(sourceStream, hash);
+      const magnet = extractMagnet(
+        sourceStream,
+        hash
+      );
+
       if (!magnet) continue;
 
       const normalizedHash = hash.toLowerCase();
-      const fileIdx = Number.isInteger(sourceStream.fileIdx) ? sourceStream.fileIdx : null;
+
+      const fileIdx = Number.isInteger(
+        sourceStream.fileIdx
+      )
+        ? sourceStream.fileIdx
+        : null;
+
       const key = `${normalizedHash}:${fileIdx ?? ''}`;
+
       if (seen.has(key)) continue;
+
       seen.add(key);
 
-      const quality = sourceStream?.name ? String(sourceStream.name) : 'Torrent';
-      const filename = firstLine(sourceStream?.behaviorHints?.filename);
-      const size = firstLine(sourceStream?.behaviorHints?.videoSize) || firstLine(sourceStream?.videoSize);
-      const seeders = sourceStream?.seeders ?? sourceStream?.behaviorHints?.seeders;
+      const quality = sourceStream?.name
+        ? String(sourceStream.name)
+        : 'Torrent';
+
+      const filename = firstLine(
+        sourceStream?.behaviorHints?.filename
+      );
+
+      const size =
+        firstLine(
+          sourceStream?.behaviorHints?.videoSize
+        ) ||
+        firstLine(sourceStream?.videoSize);
+
+      const seeders =
+        sourceStream?.seeders ??
+        sourceStream?.behaviorHints?.seeders;
+
       const details = [
         quality,
-        filename && filename !== quality ? filename : '',
+        filename && filename !== quality
+          ? filename
+          : '',
         size ? `Size: ${size}` : '',
-        seeders != null ? `Seeders: ${seeders}` : '',
+        seeders != null
+          ? `Seeders: ${seeders}`
+          : '',
         `Source: ${sourceName}`
       ].filter(Boolean);
 
       streams.push({
         name: `🧲 ${quality}`,
-        description: `${details.join(' • ')}\n${magnet}`,
+        description:
+          `${details.join(' • ')}\n${magnet}`,
+
         infoHash: hash,
-        ...(fileIdx !== null ? { fileIdx } : {}),
-        ...(Array.isArray(sourceStream.sources) ? { sources: sourceStream.sources } : {}),
-        ...(sourceStream.behaviorHints ? { behaviorHints: sourceStream.behaviorHints } : {})
+
+        ...(fileIdx !== null
+          ? { fileIdx }
+          : {}),
+
+        ...(Array.isArray(sourceStream.sources)
+          ? {
+              sources: sourceStream.sources
+            }
+          : {}),
+
+        ...(sourceStream.behaviorHints
+          ? {
+              behaviorHints:
+                sourceStream.behaviorHints
+            }
+          }
+          : {})
       });
     }
   }
 
-  console.log(`[result] ${args.type}/${args.id}: ${streams.length} torrent stream(s)`);
+  console.log(
+    `[result] ${args.type}/${args.id}: ${streams.length} torrent stream(s)`
+  );
+
   return { streams };
 });
 
-serveHTTP(builder.getInterface(), { port: PORT, host: '0.0.0.0' });
+serveHTTP(
+  builder.getInterface(),
+  {
+    port: PORT,
+    host: '0.0.0.0'
+  }
+);
 
 console.log('');
 console.log('Magnet Extractor is running.');
-const LOCAL_IP = process.env.LOCAL_IP || '127.0.0.1';
-console.log(`Manifest: http://${LOCAL_IP}:${PORT}/manifest.json`);
-console.log(`Install:  stremio://${LOCAL_IP}:${PORT}/manifest.json`);
-console.log(`Configure: http://${LOCAL_IP}:${PORT}/configure`);
-console.log(`LAN bind:  0.0.0.0:${PORT}`);
-console.log(`Default source: ${DEFAULT_TORRENTIO}`);
+
+const LOCAL_IP =
+  process.env.LOCAL_IP || '127.0.0.1';
+
+console.log(
+  `Manifest: http://${LOCAL_IP}:${PORT}/manifest.json`
+);
+
+console.log(
+  `Install:  stremio://${LOCAL_IP}:${PORT}/manifest.json`
+);
+
+console.log(
+  `Configure: http://${LOCAL_IP}:${PORT}/configure`
+);
+
+console.log(
+  `LAN bind:  0.0.0.0:${PORT}`
+);
+
+console.log(
+  `Default source: ${DEFAULT_TORRENTIO}`
+);
+
 console.log('');

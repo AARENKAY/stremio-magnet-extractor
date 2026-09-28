@@ -1,4 +1,4 @@
-# Stremio Universal Magnet Extractor v1.3.0
+# Stremio Universal Magnet Extractor
 
 A small Stremio addon that queries configured Stremio addon stream endpoints and extracts torrent hashes/magnets from their results.
 

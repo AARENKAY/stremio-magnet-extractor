@@ -14,8 +14,12 @@ const MAX_SOURCES = 10;
 const DEFAULT_SOURCES = [
   'https://comet.elfhosted.com'
 ];
-const ADDON_VERSION = '1.4.0';
+const ADDON_VERSION = '1.5.0';
 const CACHE_MAX_AGE_S = 900;
+const ENABLE_1337X = process.env.ENABLE_1337X !== '0';
+const X1337_BASE = 'https://1337x.to';
+const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
+const MAX_1337X_RESULTS = 10;
 
 // Opt-in SSRF guard. Set BLOCK_PRIVATE_SOURCES=1 if this addon is reachable
 // by people you don't trust. Leave it off if your sources run on your LAN.
@@ -43,6 +47,13 @@ const manifest = {
       type: 'text',
       title: 'Addon base URLs (separate with spaces)',
       default: DEFAULT_SOURCES,
+      required: false
+    },
+    {
+      key: 'enable1337x',
+      type: 'checkbox',
+      title: 'Search 1337x',
+      default: ENABLE_1337X,
       required: false
     },
     {
@@ -170,6 +181,162 @@ async function fetchJson(url, timeoutMs) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* ---------- 1337x search ---------- */
+
+async function fetchText(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: BLOCK_PRIVATE_SOURCES ? 'error' : 'follow',
+      headers: {
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      const redirected = response.url && response.url !== url
+        ? ` -> ${safeHost(response.url)}`
+        : '';
+      throw new Error(`HTTP ${response.status}${redirected}`);
+    }
+
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function decodeHtml(value) {
+  return String(value || '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#x2F;|&#47;/gi, '/')
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) ? String.fromCharCode(code) : _;
+    });
+}
+
+function htmlToText(value) {
+  return decodeHtml(String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function absolute1337xUrl(href) {
+  try {
+    return new URL(href, X1337_BASE).href;
+  } catch (_) {
+    return null;
+  }
+}
+
+function extract1337xLinks(html) {
+  const links = [];
+  const seen = new Set();
+  const re = /href\s*=\s*["']([^"']*\/torrent\/[^"']+)["']/gi;
+  let match;
+
+  while ((match = re.exec(html))) {
+    const url = absolute1337xUrl(decodeHtml(match[1]));
+    if (!url || !/^https?:\/\/[^/]*1337x\.to\/torrent\//i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    links.push(url);
+    if (links.length >= MAX_1337X_RESULTS) break;
+  }
+
+  return links;
+}
+
+function extract1337xMagnet(html) {
+  const match = String(html || '').match(/magnet:\?[^"'<>\s]+/i);
+  return match ? decodeHtml(match[0]) : null;
+}
+
+function extract1337xTitle(html) {
+  const match = String(html || '').match(
+    /<div[^>]*class=["'][^"']*box-info-heading[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
+  );
+  return match ? htmlToText(match[1]) : '';
+}
+
+async function getCinemetaMeta(type, id, timeoutMs) {
+  const imdbId = String(id).split(':', 1)[0];
+  const url = `${CINEMETA_BASE}/meta/${encodeURIComponent(type)}/${encodeURIComponent(imdbId)}.json`;
+  const data = await fetchJson(url, timeoutMs);
+  const meta = data?.meta;
+
+  if (!meta?.name) throw new Error(`No Cinemeta metadata for ${imdbId}`);
+
+  return {
+    name: String(meta.name),
+    year: meta.year ? String(meta.year).slice(0, 4) : ''
+  };
+}
+
+function build1337xQuery(type, id, meta) {
+  const name = meta?.name || String(id).split(':', 1)[0];
+
+  if (type === 'series') {
+    const parts = String(id).split(':');
+    const season = Number(parts[1]);
+    const episode = Number(parts[2]);
+
+    if (Number.isInteger(season) && Number.isInteger(episode)) {
+      return `${name} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+    }
+  }
+
+  return meta?.year ? `${name} ${meta.year}` : name;
+}
+
+async function search1337x(type, id, timeoutMs) {
+  const meta = await getCinemetaMeta(type, id, timeoutMs);
+  const query = build1337xQuery(type, id, meta);
+  const searchUrl = `${X1337_BASE}/search/${encodeURIComponent(query)}/1/`;
+  const searchHtml = await fetchText(searchUrl, timeoutMs);
+  const links = extract1337xLinks(searchHtml);
+
+  if (!links.length) return [];
+
+  const results = await Promise.all(
+    links.map(async url => {
+      try {
+        const html = await fetchText(url, timeoutMs);
+        const magnet = extract1337xMagnet(html);
+        if (!magnet) return null;
+
+        const title = extract1337xTitle(html) || query;
+
+        return {
+          name: '1337x',
+          title,
+          url: magnet,
+          description: `1337x • ${title}`
+        };
+      } catch (error) {
+        console.warn(`[1337x item failed] ${safeHost(url)} :: ${error.message}`);
+        return null;
+      }
+    })
+  );
+
+  return results.filter(Boolean);
 }
 
 /* ---------- stream parsing ---------- */
@@ -358,6 +525,9 @@ builder.defineStreamHandler(async args => {
   const config = args.config || {};
 
   const sources = normalizeSources(config.sources || DEFAULT_SOURCES);
+  const enable1337x = config.enable1337x === undefined
+    ? ENABLE_1337X
+    : String(config.enable1337x).toLowerCase() === 'true';
 
   const timeout = Math.max(
     1000,
@@ -371,14 +541,22 @@ builder.defineStreamHandler(async args => {
     validSources = validSources.filter((_, i) => !blocked[i]);
   }
 
-  if (!validSources.length) {
+  const sourceCount = validSources.length + (enable1337x ? 1 : 0);
+
+  if (!sourceCount) {
     return { streams: [], cacheMaxAge: 60 };
   }
 
-  console.log(`[request] ${args.type}/${args.id} -> ${validSources.length} source(s)`);
+  console.log(`[request] ${args.type}/${args.id} -> ${sourceCount} source(s)`);
 
-  const results = await Promise.all(
-    validSources.map(async source => {
+  const results = await Promise.all([
+    ...(enable1337x
+      ? [search1337x(args.type, args.id, timeout).catch(error => {
+          console.warn(`[source failed] 1337x.to :: ${error.message}`);
+          return [];
+        })]
+      : []),
+    ...validSources.map(async source => {
       const url = buildStreamUrl(source, args.type, args.id);
 
       try {
@@ -389,13 +567,15 @@ builder.defineStreamHandler(async args => {
         return [];
       }
     })
-  );
+  ]);
 
   const streams = [];
   const seen = new Set();
 
   for (let sourceIndex = 0; sourceIndex < results.length; sourceIndex++) {
-    const sourceName = safeHost(validSources[sourceIndex]);
+    const sourceName = enable1337x && sourceIndex === 0
+      ? '1337x.to'
+      : safeHost(validSources[enable1337x ? sourceIndex - 1 : sourceIndex]);
 
     for (const sourceStream of results[sourceIndex]) {
       const hash = extractHash(sourceStream);
@@ -442,7 +622,6 @@ builder.defineStreamHandler(async args => {
 
   console.log(`[result] ${args.type}/${args.id}: ${streams.length} torrent stream(s)`);
 
-  // Cache hits for a while, but retry empty/failed lookups quickly.
   return {
     streams,
     cacheMaxAge: streams.length ? CACHE_MAX_AGE_S : 60
@@ -459,6 +638,7 @@ console.log(`Manifest:  http://${LOCAL_IP}:${PORT}/manifest.json`);
 console.log(`Install:   stremio://${LOCAL_IP}:${PORT}/manifest.json`);
 console.log(`Configure: http://${LOCAL_IP}:${PORT}/configure`);
 console.log(`LAN bind:  0.0.0.0:${PORT}`);
-console.log(`Default source: ${DEFAULT_SOURCES}`);
+console.log(`Default source(s): ${DEFAULT_SOURCES.join(', ') || 'none'}`);
+console.log(`1337x search: ${ENABLE_1337X ? 'on' : 'off'}`);
 console.log(`Private-host blocking: ${BLOCK_PRIVATE_SOURCES ? 'on' : 'off'}`);
 console.log('');

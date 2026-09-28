@@ -1,0 +1,18 @@
+{
+  "name": "stremio-magnet-extractor",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Configurable Stremio addon that collects torrent metadata from authorized addon stream endpoints and builds magnet URIs.",
+  "main": "addon.js",
+  "scripts": {
+    "start": "node addon.js",
+    "stremio-install": "sh -c 'am start -a android.intent.action.VIEW -d \"stremio://127.0.0.1:${PORT:-7000}/manifest.json\"'",
+    "stremio-install-lan": "sh -c 'am start -a android.intent.action.VIEW -d \"stremio://${LOCAL_IP:-127.0.0.1}:${PORT:-7000}/manifest.json\"'"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "stremio-magnet-extractor",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Configurable Stremio addon that collects torrent metadata from authorized addon stream endpoints and builds magnet URIs.",
   "main": "addon.js",
